@@ -56,7 +56,9 @@ export default {
         const c = h('input', { type: 'checkbox', class: 'checkbox', onChange: () => { opts[key] = c.checked; changed(); } });
         return h('div', {}, h('label', { class: 'flex min-h-9 items-center gap-2 text-[13px]' }, c, label), h('p', { class: 'help' }, help));
       };
-      optFields.push(cb('without_rowid', 'WITHOUT ROWID', t('createTable.withoutRowidHelp')), cb('strict', 'STRICT', t('createTable.strictHelp')));
+      optFields.push(cb('without_rowid', 'WITHOUT ROWID', t('createTable.withoutRowidHelp')));
+      // STRICT tables need SQLite 3.37 (capability strict_tables).
+      if (caps.strict_tables !== false) optFields.push(cb('strict', 'STRICT', t('createTable.strictHelp')));
     }
 
     // ----- columns

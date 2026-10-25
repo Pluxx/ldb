@@ -45,15 +45,21 @@ jobs:
         run: vendor/bin/phpunit --do-not-cache-result --testsuite Unit
 
   integration:
-    name: Integration (PHP ${{ matrix.php }})
+    # "current" = the versions of the dev stack; "oldest" = the oldest officially supported
+    # releases (first of 2018 or later, see src/Db/ServerVersion.php and README "Supported database versions").
+    name: Integration (PHP ${{ matrix.php }}, ${{ matrix.servers }} servers)
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        php: ['7.4', '8.3']
+        include:
+          - { php: '7.4', servers: current, mariadb: 'mariadb:11', mysql: 'mysql:8.0', postgres: 'postgres:17' }
+          - { php: '8.3', servers: current, mariadb: 'mariadb:11', mysql: 'mysql:8.0', postgres: 'postgres:17' }
+          - { php: '7.4', servers: oldest, mariadb: 'mariadb:10.3', mysql: 'mysql:8.0.11', postgres: 'postgres:11' }
+          - { php: '8.3', servers: oldest, mariadb: 'mariadb:10.3', mysql: 'mysql:8.0.11', postgres: 'postgres:11' }
     services:
       mariadb:
-        image: mariadb:11
+        image: ${{ matrix.mariadb }}
         env:
           MARIADB_ROOT_PASSWORD: root
           MARIADB_DATABASE: ldb_demo
@@ -62,7 +68,7 @@ jobs:
           --health-cmd "healthcheck.sh --connect --innodb_initialized"
           --health-interval 5s --health-timeout 5s --health-retries 20
       mysql:
-        image: mysql:8.0
+        image: ${{ matrix.mysql }}
         env:
           MYSQL_ROOT_PASSWORD: root
           MYSQL_DATABASE: ldb_demo
@@ -71,7 +77,7 @@ jobs:
           --health-cmd "mysqladmin ping -h 127.0.0.1 -proot --silent"
           --health-interval 5s --health-timeout 5s --health-retries 30
       postgres:
-        image: postgres:17
+        image: ${{ matrix.postgres }}
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -113,12 +119,17 @@ jobs:
 
   integration-sqlsrv:
     # Separate from "integration" so a SQL Server (or ODBC driver) problem is clearly attributable.
-    name: Integration SQL Server (PHP 8.3)
+    # 2019 is the oldest officially supported release.
+    name: Integration SQL Server ${{ matrix.mssql }} (PHP 8.3)
     runs-on: ubuntu-latest
     continue-on-error: false
+    strategy:
+      fail-fast: false
+      matrix:
+        mssql: ['2019', '2022']
     services:
       mssql:
-        image: mcr.microsoft.com/mssql/server:2022-latest
+        image: mcr.microsoft.com/mssql/server:${{ matrix.mssql }}-latest
         env:
           ACCEPT_EULA: 'Y'
           MSSQL_SA_PASSWORD: Ldb_Passw0rd!

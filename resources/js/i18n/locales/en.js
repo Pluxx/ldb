@@ -1049,6 +1049,11 @@ export default {
   'readonly.unavailableTitle': 'Read-only connection',
   'readonly.unavailable': 'This action changes data or structure and is disabled for read-only connections.',
 
+  // ---- server version support (banner for servers older than the supported minimum)
+  'version.unsupported': 'This server version is older than LDB supports. Some features may not work.',
+  'version.unsupportedDetail': 'Connected: {product} {version}. LDB supports {product} {min} and later.',
+  'version.dismiss': 'Dismiss',
+
   // ---- saved queries (SQL editor panel, browser-local)
   'savedQueries.title': 'Saved queries',
   'savedQueries.search': 'Search saved queries',

@@ -65,11 +65,26 @@ interface DriverInterface
      * db_alter (alterDatabase()), db_copy (copyDatabase()), db_rename (rename a database:
      * native on PostgreSQL/SQL Server, copy + drop on MySQL), monitor (server.metrics/slowLog/advice
      * via Ldb\Monitor\ServerMonitor; false on SQLite)
+     *
+     * Version-dependent keys (decided from serverVersion(), driver specific, absent = not applicable):
+     *  check_constraints, generated_columns, functional_indexes, default_expressions,
+     *  invisible_columns, rename_column (native statement), drop_column_native, explain_tree,
+     *  explain_analyze, roles, account_lock, password_expire, sequences, create_or_replace_trigger,
+     *  create_or_alter, reindex_concurrently, procedures, strict_tables, returning, upsert,
+     *  window_functions. Features with a false flag are hidden in the UI and refused by the backend
+     *  with 'unsupported' (or done with a fallback, e.g. SQLite table rebuild).
      */
     public function capabilities(): array;
 
-    /** {name, version, version_comment, host, user, charset?, uptime?, driver} */
+    /**
+     * {name, version, version_comment, host, user, charset?, uptime?, driver,
+     *  version_number, version_supported, min_version, version_flavor} (see ServerVersion: servers older than the
+     * minimum are usable, but version_supported is false and the UI shows a warning)
+     */
     public function serverInfo(): array;
+
+    /** Normalized numeric server version, e.g. "8.0.11", "10.3.39", "11.22", "15.0.4415.2", "3.22.0". */
+    public function serverVersion(): string;
 
     /** [{name, collation?, tables?, size?}] */
     public function listDatabases(): array;

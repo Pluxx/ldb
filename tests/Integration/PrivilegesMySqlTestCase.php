@@ -104,7 +104,15 @@ abstract class PrivilegesMySqlTestCase extends TestCase
         // every test starts from an account without privileges, role grants or options
         $acct = self::q(self::$user) . '@`%`';
         self::$d->pdo()->exec('REVOKE ALL PRIVILEGES, GRANT OPTION FROM ' . $acct);
-        self::$d->pdo()->exec('ALTER USER ' . $acct . ' ACCOUNT UNLOCK');
+        if (self::$d->capabilities()['account_lock']) {
+            self::$d->pdo()->exec('ALTER USER ' . $acct . ' ACCOUNT UNLOCK');
+        }
+    }
+
+    /** ACCOUNT LOCK needs MySQL 5.7.6 / MariaDB 10.4.2. */
+    private function canLock(): bool
+    {
+        return (bool) $this->manager()->read(self::$user, '%')['features']['lock'];
     }
 
     protected static function q(string $name): string
@@ -403,6 +411,17 @@ abstract class PrivilegesMySqlTestCase extends TestCase
 
     public function testLockAndUnlock(): void
     {
+        if (!$this->canLock()) {
+            // the UI hides the option; the planner refuses it
+            try {
+                $this->manager()->plan(self::$user, '%', ['account' => ['lock' => true]]);
+                $this->fail('Expected unsupported');
+            } catch (ApiException $e) {
+                $this->assertSame('unsupported', $e->getErrorCode());
+            }
+            $this->assertFalse($this->manager()->read(self::$user, '%')['features']['password_expire']);
+            return;
+        }
         $this->assertFalse($this->manager()->read(self::$user, '%')['account']['locked']);
         $this->applyOk(['account' => ['lock' => true]]);
         $this->assertTrue($this->manager()->read(self::$user, '%')['account']['locked']);
@@ -451,6 +470,9 @@ abstract class PrivilegesMySqlTestCase extends TestCase
             [['account' => ['lock' => true]], 'lock_self'],
             [['rename' => ['user' => $login . '_renamed']], 'rename_self'],
         ] as [$changes, $reason]) {
+            if ($reason === 'lock_self' && !$this->canLock()) {
+                continue;
+            }
             try {
                 $this->manager()->apply($login, $host, $changes, false);
                 $this->fail('Expected self_lockout for ' . $reason);
@@ -460,7 +482,7 @@ abstract class PrivilegesMySqlTestCase extends TestCase
             }
             $after = $this->manager()->read($login, $host);
             $this->assertContains('SUPER', $after['global'], 'nothing must have been executed');
-            $this->assertFalse($after['account']['locked']);
+            $this->assertNotTrue($after['account']['locked']);
         }
         $plan = $this->manager()->plan($login, $host, ['global' => ['remove' => ['SUPER']]]);
         $this->assertTrue($plan['self']);

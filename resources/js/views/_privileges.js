@@ -581,19 +581,20 @@ export function mountPrivileges(el, o) {
       const lockId = uid('lk'); const sslId = uid('ssl'); const expId = uid('ex'); const daysId = uid('dy');
       const days = h('input', { id: daysId, type: 'number', min: '1', max: '65535', class: 'input w-24 shrink-0', value: A.expire_days, disabled: ro || A.expire !== 'interval', 'aria-label': t('privs.expire.days'),
         onInput: (e) => { A.expire_days = e.target.value; changed(); } });
+      // F.lock / F.password_expire are false on servers without these ALTER USER options (MariaDB < 10.4).
       parts.push(section(t('privs.overview.security'),
-        h('label', { class: 'flex items-center gap-2 text-[13px]', for: lockId },
+        F.lock ? h('label', { class: 'flex items-center gap-2 text-[13px]', for: lockId },
           h('input', { id: lockId, type: 'checkbox', class: 'checkbox', checked: A.locked, disabled: ro, onChange: (e) => { A.locked = e.target.checked; changed(); } }),
-          t('privs.overview.locked')),
+          t('privs.overview.locked')) : null,
         h('div', { class: 'flex flex-wrap gap-3' },
           h('div', { class: 'min-w-0 flex-1 basis-48' }, h('label', { class: 'label', for: sslId }, t('privs.overview.requireSsl')),
             h('select', { id: sslId, class: 'select', disabled: ro, onChange: (e) => { A.require_ssl = e.target.value; changed(); } },
               ['NONE', 'SSL', 'X509'].concat(['NONE', 'SSL', 'X509'].includes(A.require_ssl) ? [] : [A.require_ssl]).map((v) => h('option', { value: v, selected: v === A.require_ssl }, t(`privs.ssl.${slug(v)}`))))),
-          h('div', { class: 'min-w-0 flex-1 basis-72' }, h('label', { class: 'label', for: expId }, t('privs.overview.passwordExpire')),
+          F.password_expire ? h('div', { class: 'min-w-0 flex-1 basis-72' }, h('label', { class: 'label', for: expId }, t('privs.overview.passwordExpire')),
             h('div', { class: 'flex gap-2' },
               h('select', { id: expId, class: 'select min-w-0 flex-1', disabled: ro, onChange: (e) => { A.expire = e.target.value; days.disabled = ro || A.expire !== 'interval'; changed(); } },
                 ['keep', 'now', 'never', 'default', 'interval'].map((v) => h('option', { value: v, selected: v === A.expire }, t(`privs.expire.${v}`)))),
-              days)))));
+              days)) : null)));
       const lim = (F.limits || []).map((k) => {
         const id = uid('lim');
         return h('div', { class: 'min-w-0' }, h('label', { class: 'label', for: id }, t(`privs.limit.${k}`)),

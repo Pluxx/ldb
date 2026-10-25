@@ -114,14 +114,15 @@ class SqliteDriver extends AbstractPdoDriver
         return $this->quoteIdentifier($table);
     }
 
+    /** Library version (or the simulated one, see simulateServerVersion()). */
     public function sqliteVersion(): string
     {
-        return (string) $this->fetchValue('SELECT sqlite_version()');
+        return $this->serverVersion();
     }
 
-    private function versionAtLeast(string $v): bool
+    protected function rawServerVersion(): string
     {
-        return version_compare($this->sqliteVersion(), $v, '>=');
+        return (string) $this->fetchValue('SELECT sqlite_version()');
     }
 
     public function capabilities(): array
@@ -155,6 +156,15 @@ class SqliteDriver extends AbstractPdoDriver
             'db_copy' => false,
             'db_rename' => false,
             'monitor' => false,
+            // version dependent (3.22 is the supported minimum; older features use the rebuild path)
+            'check_constraints' => true,
+            'rename_column' => $this->versionAtLeast('3.25.0'),      // else: table rebuild
+            'drop_column_native' => $this->versionAtLeast('3.35.0'), // else: table rebuild
+            'upsert' => $this->versionAtLeast('3.24.0'),
+            'window_functions' => $this->versionAtLeast('3.25.0'),
+            'generated_columns' => $this->versionAtLeast('3.31.0'),
+            'returning' => $this->versionAtLeast('3.35.0'),
+            'strict_tables' => $this->versionAtLeast('3.37.0'),
         ];
     }
 
@@ -169,7 +179,7 @@ class SqliteDriver extends AbstractPdoDriver
             'charset' => (string) $this->fetchValue('PRAGMA encoding'),
             'uptime' => null,
             'driver' => 'sqlite',
-        ];
+        ] + $this->versionSupport();
     }
 
     public function listDatabases(): array
@@ -416,9 +426,16 @@ class SqliteDriver extends AbstractPdoDriver
         $qt = $this->quoteLiteral($table);
 
         $pragmaCols = [];
-        try {
-            $pragmaCols = $this->fetchAll('PRAGMA table_xinfo(' . $qt . ')');
-        } catch (\PDOException $e) {
+        if ($this->versionAtLeast('3.26.0')) {
+            try {
+                $pragmaCols = $this->fetchAll('PRAGMA table_xinfo(' . $qt . ')');
+            } catch (\PDOException $e) {
+                $pragmaCols = [];
+            }
+        }
+        if ($pragmaCols === []) {
+            // table_xinfo (hidden/generated columns) needs 3.26; older libraries ignore the
+            // unknown PRAGMA silently, so an empty result falls back to table_info.
             $pragmaCols = $this->fetchAll('PRAGMA table_info(' . $qt . ')');
         }
         $pkCols = [];
@@ -738,6 +755,9 @@ class SqliteDriver extends AbstractPdoDriver
             $sql .= ' ' . $ch;
         }
         if ($generated !== '') {
+            if (!$this->versionAtLeast('3.31.0')) {
+                throw $this->needsVersion('Generated columns', 'SQLite 3.31');
+            }
             $stored = !empty($col['stored']) || stripos((string) ($col['extra'] ?? ''), 'STORED') !== false;
             $sql .= ' GENERATED ALWAYS AS (' . $generated . ') ' . ($stored ? 'STORED' : 'VIRTUAL');
         }
@@ -850,6 +870,9 @@ class SqliteDriver extends AbstractPdoDriver
             $cols[] = [(array) $c, []];
         }
         $opts = (array) ($definition['options'] ?? []);
+        if (!empty($opts['strict']) && !$this->versionAtLeast('3.37.0')) {
+            throw $this->needsVersion('STRICT tables', 'SQLite 3.37');
+        }
         $out = [$this->createTableSql($name, $cols, $pk, $uniqueIdx, (array) ($definition['foreign_keys'] ?? []), [], !empty($opts['without_rowid']), !empty($opts['strict']))];
         foreach ($other as $ix) {
             $out[] = $this->indexSql($name, $ix);
@@ -903,7 +926,7 @@ class SqliteDriver extends AbstractPdoDriver
         $native = [];
         $after = []; // CREATE INDEX statements run after the main work
         $rebuild = false;
-        $v = $this->sqliteVersion();
+        $v = $this->serverVersion();
 
         // modify
         foreach ((array) ($spec['modify'] ?? []) as $m) {

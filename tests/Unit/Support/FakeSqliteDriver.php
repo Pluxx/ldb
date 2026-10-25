@@ -77,6 +77,11 @@ final class FakeSqliteDriver implements DriverInterface
         return ['name' => 'SQLite', 'version' => '3'];
     }
 
+    public function serverVersion(): string
+    {
+        return (string) $this->pdo->query('SELECT sqlite_version()')->fetchColumn();
+    }
+
     public function listTables(): array
     {
         return $this->pdo->query("SELECT name, type FROM sqlite_master WHERE type IN ('table','view') AND name NOT LIKE 'sqlite_%' ORDER BY name")->fetchAll();

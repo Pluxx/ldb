@@ -104,6 +104,18 @@ final class MySqlPrivilegePlanner extends AbstractPrivilegePlanner
         return $this->mariaDb ? $this->atLeast('10.0.5') : $this->atLeast('8.0.0');
     }
 
+    /** ALTER USER … ACCOUNT LOCK / UNLOCK: MySQL 5.7.6+, MariaDB 10.4.2+. */
+    public function supportsAccountLock(): bool
+    {
+        return $this->mariaDb ? $this->atLeast('10.4.2') : $this->atLeast('5.7.6');
+    }
+
+    /** ALTER USER … PASSWORD EXPIRE [NEVER|DEFAULT|INTERVAL n DAY]: MySQL 5.7.4+, MariaDB 10.4.3+. */
+    public function supportsPasswordExpire(): bool
+    {
+        return $this->mariaDb ? $this->atLeast('10.4.3') : $this->atLeast('5.7.4');
+    }
+
     /** MariaDB roles have no host part; MySQL 8 roles are `name`@`host`. */
     public function rolesHaveHost(): bool
     {
@@ -264,6 +276,9 @@ final class MySqlPrivilegePlanner extends AbstractPrivilegePlanner
             }
             $lock = false;
         }
+        if ($lock !== null && !$this->supportsAccountLock()) {
+            throw ApiException::unsupported('ACCOUNT LOCK needs MySQL 5.7.6 or MariaDB 10.4.2');
+        }
         if ($lock !== null && ($current === null || (bool) ($current['account']['locked'] ?? !$lock) !== $lock)) {
             $parts[] = $lock ? 'ACCOUNT LOCK' : 'ACCOUNT UNLOCK';
             if ($lock && $self) {
@@ -271,6 +286,9 @@ final class MySqlPrivilegePlanner extends AbstractPrivilegePlanner
             }
         }
         if (array_key_exists('password_expire', $account) && $account['password_expire'] !== null && $account['password_expire'] !== false) {
+            if (!$this->supportsPasswordExpire()) {
+                throw ApiException::unsupported('PASSWORD EXPIRE needs MySQL 5.7.4 or MariaDB 10.4.3');
+            }
             $pe = $account['password_expire'];
             if ($pe === true || $pe === 'now') {
                 $parts[] = 'PASSWORD EXPIRE';

@@ -1077,6 +1077,9 @@ export default {
   'readonly.error': 'No permitido: esta conexión es de solo lectura.',
   'readonly.unavailableTitle': 'Conexión de solo lectura',
   'readonly.unavailable': 'Esta acción modifica datos o estructura y está desactivada en las conexiones de solo lectura.',
+  'version.unsupported': 'Esta versión del servidor es más antigua que las que admite LDB. Es posible que algunas funciones no estén disponibles.',
+  'version.unsupportedDetail': 'Conectado: {product} {version}. LDB admite {product} {min} y posteriores.',
+  'version.dismiss': 'Descartar',
 
   // ---- saved queries (SQL editor panel, browser-local)
   'savedQueries.title': 'Consultas guardadas',

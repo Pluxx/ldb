@@ -9,6 +9,12 @@ assets are committed, so a deployment only needs PHP (`composer install --no-dev
 Supported engines (via PDO): **MySQL / MariaDB / Percona** (primary, full feature set),
 **PostgreSQL**, **SQLite 3**, **Microsoft SQL Server** (pdo_sqlsrv or pdo_dblib).
 Features that a driver cannot support are switched off through `capabilities()`, and the UI hides them.
+Supported server versions: every release of 2018 or later (MySQL 8.0.11, MariaDB 10.3, PostgreSQL 11,
+SQL Server 2019, SQLite 3.22). `Ldb\Db\ServerVersion` parses and compares versions and holds this policy;
+each driver exposes `serverVersion()` (normalized) and decides version-dependent capability keys from it
+(list in DriverInterface::capabilities()). Older servers still connect: `serverInfo()` and the connection
+metadata report `version_supported:false` + `min_version`, and the UI shows a dismissible warning banner.
+`simulateServerVersion()` lets unit tests exercise the version paths without such a server.
 
 ## Hard rules (all code)
 
@@ -55,7 +61,8 @@ src/Auth/{Totp,TwoFactor,TwoFactorStore}.php   2FA: RFC 6238 TOTP, policy/recove
 src/Controller/TwoFactorController.php   twofa.* actions (self-service setup/disable)
 bin/twofa                  CLI: list / reset 2FA records (lost devices)
 src/Db/DriverInterface.php      ← CONTRACT (written, do not change signatures silently)
-src/Db/AbstractPdoDriver.php    shared PDO plumbing
+src/Db/AbstractPdoDriver.php    shared PDO plumbing (+ serverVersion()/versionSupport())
+src/Db/ServerVersion.php        version parsing/comparison, supported minimum per engine
 src/Db/{MySqlDriver,PgSqlDriver,SqliteDriver,SqlSrvDriver}.php
 src/Db/DriverFactory.php
 src/Sql/{SqlSplitter,SqlFormatter}.php
@@ -116,7 +123,7 @@ Downloads (export) stream a file instead of JSON (`action=export.download`, form
 
 | action | params | data |
 |---|---|---|
-| `auth.status` | none | `{authenticated, csrf, connections:[{id,driver,host,user,label,server,read_only}], presets:[…+read_only], drivers:[{id,label,available}], version}` |
+| `auth.status` | none | `{authenticated, csrf, connections:[{id,driver,host,user,label,server,read_only,version,version_number,version_supported,min_version,version_flavor}], presets:[…+read_only], drivers:[{id,label,available}], version}` |
 | `auth.login` | `driver,host,port,user,password,database?,label?,preset?,file?(sqlite),read_only?` | same as status + `conn` (+`twofa_enroll`), or + `twofa_required:true` (nothing stored yet → `auth.verify2fa`) |
 | `auth.logout` | `conn?` (all if omitted) | status |
 | `auth.verify2fa` | `code` or `recovery_code` (second login step; CSRF) | same as status + `conn` |

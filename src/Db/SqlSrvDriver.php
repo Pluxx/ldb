@@ -8,7 +8,8 @@ use Ldb\Http\ApiException;
 use PDO;
 
 /**
- * Microsoft SQL Server 2016+ driver via pdo_sqlsrv (preferred) or pdo_dblib (FreeTDS fallback).
+ * Microsoft SQL Server driver via pdo_sqlsrv (preferred) or pdo_dblib (FreeTDS fallback). Officially
+ * supported: SQL Server 2019 (15.x)+ (see ServerVersion); 2016/2017 work with reduced features.
  *
  * Schemas are supported (default: the user's default schema, usually dbo); metadata comes from
  * the sys.* catalog views. Paging uses OFFSET … FETCH which requires an ORDER BY.
@@ -17,6 +18,9 @@ class SqlSrvDriver extends AbstractPdoDriver
 {
     /** 'sqlsrv' or 'dblib' — the PDO driver actually used. */
     private string $pdoDriver = 'sqlsrv';
+
+    /** SERVERPROPERTY('ProductVersion'), e.g. "15.0.4415.2" (cached per connection). */
+    private ?string $productVersion = null;
 
     public static function id(): string
     {
@@ -90,6 +94,7 @@ class SqlSrvDriver extends AbstractPdoDriver
     public function connect(array $params): void
     {
         $this->params = $params;
+        $this->productVersion = null;
         $this->pdoDriver = self::usesSqlsrvExtension($params) ? 'sqlsrv' : 'dblib';
         $options = [
             PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
@@ -227,7 +232,24 @@ class SqlSrvDriver extends AbstractPdoDriver
             'db_copy' => false,
             'db_rename' => true,
             'monitor' => true,
+            // version dependent (SQL Server 2019 = 15.x is the supported minimum)
+            'check_constraints' => true,
+            'generated_columns' => true, // computed columns
+            'rename_column' => true,      // sp_rename
+            'roles' => true,
+            'sequences' => true,
+            'create_or_alter' => $this->versionAtLeast('13.0.4001'), // 2016 SP1
+            'string_agg' => $this->versionAtLeast('14.0'),           // 2017
+            'utf8_collations' => $this->versionAtLeast('15.0'),      // 2019
         ];
+    }
+
+    protected function rawServerVersion(): string
+    {
+        if ($this->productVersion === null) {
+            $this->productVersion = (string) $this->fetchValue("SELECT CAST(SERVERPROPERTY('ProductVersion') AS nvarchar(128))");
+        }
+        return $this->productVersion;
     }
 
     public function serverInfo(): array
@@ -255,7 +277,7 @@ class SqlSrvDriver extends AbstractPdoDriver
             // must be exactly the driver id: the frontend picks its driver profile (types, quoting) from it
             'driver' => self::id(),
             'pdo_extension' => 'pdo_' . $this->pdoDriver,
-        ];
+        ] + ServerVersion::support('sqlsrv', $this->simulatedVersion ?? (string) ($r['version'] ?? ''));
     }
 
     public function listDatabases(): array

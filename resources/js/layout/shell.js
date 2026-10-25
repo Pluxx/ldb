@@ -14,6 +14,7 @@ import { href, navigate } from '../router.js';
 import { setTheme, themeIcon } from '../ui/theme.js';
 import { createSidebar } from './sidebar.js';
 import { changeLocale, logout, isReadOnly } from '../session.js';
+import { getOverview } from '../data.js';
 
 /** Display label of a connection. */
 export function connectionLabel(c) {
@@ -21,6 +22,32 @@ export function connectionLabel(c) {
   if (c.label) return c.label;
   if (c.driver === 'sqlite') return c.database || 'SQLite';
   return `${c.user || ''}@${c.host || ''}`;
+}
+
+const PRODUCTS = { mysql: 'MySQL', mariadb: 'MariaDB', pgsql: 'PostgreSQL', sqlsrv: 'SQL Server', sqlite: 'SQLite' };
+
+/**
+ * Version support of a connection: from the login metadata, else (sessions from before the field
+ * existed) from server.overview. Resolves to null when the server version is supported.
+ * @returns {Promise<{product: string, version: string, min: string, key: string}|null>}
+ */
+async function unsupportedVersion(c) {
+  if (!c) return null;
+  let info = c;
+  if (c.version_supported === undefined) {
+    const ov = await getOverview(c.id).catch(() => null);
+    if (!ov?.info) return null;
+    info = ov.info;
+  }
+  if (info.version_supported !== false) return null;
+  const flavor = info.version_flavor || c.driver;
+  return {
+    product: PRODUCTS[flavor] || flavor || '',
+    version: String(info.version_number || info.version || c.version || ''),
+    min: String(info.min_version ?? ''),
+    // dismissal is remembered per server and version (connection ids change per session)
+    key: `versionWarn.${[c.driver, c.server || c.host || c.database || '', c.version || info.version || ''].join('|')}`,
+  };
 }
 
 /**
@@ -122,11 +149,32 @@ export function mountShell(root) {
     h('div', { class: 'flex-1' }),
     paletteBtn, themeBtn, widthBtn, langBtn, logoutBtn);
 
+  // Dismissible warning for servers older than the supported minimum (ServerVersion.php).
+  const versionBanner = h('div', { class: 'safe-x border-b border-warning/30 bg-warning/10 px-3 py-2 text-[13px] text-fg', role: 'status', hidden: true });
+  let bannerSeq = 0;
+  async function renderVersionBanner(c) {
+    const seq = ++bannerSeq;
+    const u = await unsupportedVersion(c).catch(() => null);
+    if (seq !== bannerSeq) return;
+    if (!u || storage.get(u.key)) { versionBanner.hidden = true; versionBanner.replaceChildren(); return; }
+    const dismiss = h('button', {
+      type: 'button', class: 'btn btn-ghost btn-sm btn-icon -my-1 shrink-0', 'aria-label': t('version.dismiss'), title: t('version.dismiss'),
+      onClick: () => { storage.set(u.key, 1); versionBanner.hidden = true; versionBanner.replaceChildren(); },
+    }, icon('x'));
+    versionBanner.replaceChildren(h('div', { class: 'flex items-start gap-2' },
+      icon('warning', 'mt-0.5 shrink-0 text-warning'),
+      h('div', { class: 'min-w-0 flex-1', dir: 'auto' },
+        h('span', { class: 'font-medium' }, t('version.unsupported')), ' ',
+        h('span', { class: 'text-muted' }, t('version.unsupportedDetail', { product: u.product, version: u.version, min: u.min }))),
+      dismiss));
+    versionBanner.hidden = false;
+  }
+
   const main = h('main', { id: 'main', tabindex: '-1', class: 'flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden outline-none' });
   const skip = h('a', { href: '#main', class: 'sr-only focus:not-sr-only focus:fixed focus:start-2 focus:top-2 focus:z-[200] focus:rounded-md focus:bg-accent focus:px-3 focus:py-2 focus:text-accent-fg', onClick: (e) => { e.preventDefault(); main.focus(); } }, t('a11y.skipToContent'));
 
   const shell = h('div', { class: 'flex h-dvh flex-col bg-bg' },
-    skip, header,
+    skip, header, versionBanner,
     h('div', { class: 'safe-x flex min-h-0 flex-1' }, sidebar.el, main));
   root.replaceChildren(shell);
 
@@ -161,6 +209,7 @@ export function mountShell(root) {
       roBadge.hidden = !isReadOnly(c || {});
       connBtn.title = roBadge.hidden ? '' : t('readonly.badgeTitle');
       renderCrumbs(route);
+      renderVersionBanner(c);
       sidebar.update(route).catch((e) => console.error(e));
     },
     destroy() {

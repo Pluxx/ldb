@@ -456,7 +456,7 @@ final class MySqlRoutineEditor extends RoutineEditor
             'name' => (string) $r['EVENT_NAME'],
             'schedule' => $recurring ? [
                 'type' => 'every',
-                'interval_value' => trim((string) $r['INTERVAL_VALUE'], "'"),
+                'interval_value' => MySqlDriver::eventIntervalValue((string) $r['INTERVAL_VALUE'], (string) $r['INTERVAL_FIELD']),
                 'interval_field' => strtoupper((string) $r['INTERVAL_FIELD']),
                 'starts' => $r['STARTS'] === null ? null : (string) $r['STARTS'],
                 'ends' => $r['ENDS'] === null ? null : (string) $r['ENDS'],

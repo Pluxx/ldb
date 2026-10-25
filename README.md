@@ -106,6 +106,24 @@ Run `docker compose down` to stop it. See [Docker development stack](#d-docker-d
 - Optional extensions: `zlib` (gzip import/export), `zip` (zip import/export), `bz2` (bzip2 import), `iconv` (CSV import in non-UTF-8 encodings)
 - A web server (Apache, nginx + PHP-FPM, and so on). **Node.js is not needed to run LDB**, because the built assets are committed in `public/assets/dist/`.
 
+### Supported database versions
+
+LDB supports every database version released in 2018 or later:
+
+| Engine | Fully supported from | Released | Tested against |
+|---|---|---|---|
+| MySQL (and Percona Server) | 8.0.11 | April 2018 | 8.0.11 and the latest 8.0 |
+| MariaDB | 10.3 | May 2018 | 10.3 and 11 |
+| PostgreSQL | 11 | October 2018 | 11 and 17 |
+| Microsoft SQL Server | 2019 (15.x) | November 2019 | 2019 and 2022 |
+| SQLite | 3.22 | January 2018 | the library bundled with PHP; older versions are simulated in unit tests |
+
+Features that are newer than the minimum are used only when the server has them, for example
+`EXPLAIN ANALYZE` (MySQL 8.0.18), generated columns (PostgreSQL 12) or `STRICT` tables (SQLite 3.37).
+Otherwise LDB hides the option or uses a fallback, such as the table rebuild on SQLite before 3.25.
+Older servers can still be used, but they are not tested: LDB shows a warning banner ("This server version
+is older than LDB supports. Some features may not work."), which you can dismiss per server.
+
 ## Installation
 
 ### Download a release (easiest)

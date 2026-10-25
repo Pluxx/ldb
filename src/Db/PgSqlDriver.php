@@ -8,7 +8,8 @@ use Ldb\Http\ApiException;
 use PDO;
 
 /**
- * PostgreSQL 10–17 driver (pdo_pgsql).
+ * PostgreSQL driver (pdo_pgsql). Officially supported: 11+ (see ServerVersion); 10 works with reduced
+ * features. Version-dependent SQL is chosen with pgVersion() (server_version_num).
  *
  * A PostgreSQL connection is bound to one database, so select() reconnects when the database
  * changes; the schema is applied through search_path and used to qualify every identifier.
@@ -138,6 +139,10 @@ class PgSqlDriver extends AbstractPdoDriver
 
     private function pgVersion(): int
     {
+        if ($this->simulatedVersion !== null) {
+            $p = array_map('intval', explode('.', ServerVersion::normalize($this->simulatedVersion) . '.0.0'));
+            return $p[0] >= 10 ? $p[0] * 10000 + $p[1] : $p[0] * 10000 + $p[1] * 100 + $p[2];
+        }
         if ($this->pgVersionNum === null) {
             $this->pgVersionNum = (int) $this->fetchValue('SHOW server_version_num');
         }
@@ -173,6 +178,8 @@ class PgSqlDriver extends AbstractPdoDriver
 
     public function capabilities(): array
     {
+        // not connected (e.g. unit tests): unknown version counts as new
+        $v = $this->simulatedVersion === null && $this->pdo === null && $this->params === [] ? PHP_INT_MAX : $this->pgVersion();
         return [
             'schemas' => true,
             'users' => true,
@@ -202,7 +209,23 @@ class PgSqlDriver extends AbstractPdoDriver
             'db_copy' => true,
             'db_rename' => true,
             'monitor' => true,
+            // version dependent
+            'check_constraints' => true,
+            'generated_columns' => $v >= 120000,
+            'rename_column' => true,
+            'explain_analyze' => true,
+            'roles' => true,
+            'sequences' => true,
+            'procedures' => $v >= 110000,
+            'reindex_concurrently' => $v >= 120000,
+            'create_or_replace_trigger' => $v >= 140000,
+            'maintain_privilege' => $v >= 170000,
         ];
+    }
+
+    protected function rawServerVersion(): string
+    {
+        return (string) $this->fetchValue('SHOW server_version');
     }
 
     public function serverInfo(): array
@@ -222,7 +245,7 @@ class PgSqlDriver extends AbstractPdoDriver
             'charset' => $row['enc'] ?? null,
             'uptime' => isset($row['uptime']) ? (int) $row['uptime'] : null,
             'driver' => self::id(),
-        ];
+        ] + ServerVersion::support('pgsql', $this->simulatedVersion ?? (string) ($row['version'] ?? ''));
     }
 
     public function listDatabases(): array

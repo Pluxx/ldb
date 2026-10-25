@@ -278,7 +278,7 @@ final class MySqlPrivileges extends PrivilegeManager
             'global' => true, 'databases' => true, 'tables' => true, 'columns' => true, 'schemas' => false,
             'roles' => $p->supportsRoles(), 'default_roles' => $p->supportsRoles() ? ($maria ? 'single' : 'multi') : false,
             'role_host' => !$maria,
-            'limits' => $limits, 'lock' => true, 'password_expire' => true, 'require_ssl' => true,
+            'limits' => $limits, 'lock' => $p->supportsAccountLock(), 'password_expire' => $p->supportsPasswordExpire(), 'require_ssl' => true,
             'attributes' => [], 'deny' => false, 'server_roles' => false, 'db_roles' => false,
             'create_role' => $p->supportsRoles(), 'rename' => true, 'clone' => true, 'host' => true,
         ];

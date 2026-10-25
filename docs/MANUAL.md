@@ -36,10 +36,41 @@ Composer dependencies. Node.js is not needed to run it.
 | MySQL, MariaDB, Percona | `pdo_mysql` |
 | PostgreSQL | `pdo_pgsql` |
 | SQLite | `pdo_sqlite` |
-| Microsoft SQL Server 2016+ | `pdo_sqlsrv` (preferred) or `pdo_dblib` (FreeTDS) |
+| Microsoft SQL Server | `pdo_sqlsrv` (preferred) or `pdo_dblib` (FreeTDS) |
 
 Features that an engine cannot support are hidden automatically. For example, SQLite has no
 user administration, and only MySQL/MariaDB has storage engines and scheduled events.
+
+### Supported database versions
+
+LDB supports every database version released in 2018 or later. The minimum per engine:
+
+| Engine | Fully supported from | Released | Tested against |
+|---|---|---|---|
+| MySQL (and Percona Server) | 8.0.11 | April 2018 | 8.0.11 and the latest 8.0 |
+| MariaDB | 10.3 | May 2018 | 10.3 and 11 |
+| PostgreSQL | 11 | October 2018 | 11 and 17 |
+| Microsoft SQL Server | 2019 (15.x) | November 2019 | 2019 and 2022 |
+| SQLite | 3.22 | January 2018 | the library bundled with PHP; older versions are simulated in unit tests |
+
+How LDB deals with versions:
+
+- **Newer features are optional.** LDB checks the server version and uses a feature only when
+  the server has it. Otherwise the option is hidden or LDB uses a fallback. Examples:
+  - MySQL 8.0.11 to 8.0.15 accept `CHECK` constraints but do not store them, so the schema diff
+    does not compare them. `EXPLAIN FORMAT=TREE` needs 8.0.16, `EXPLAIN ANALYZE` 8.0.18 and
+    functional index parts 8.0.13.
+  - MariaDB before 10.4 has no account locking and no password expiry; the privileges editor hides
+    both options.
+  - PostgreSQL before 12 has no generated columns, and before 14 a trigger is replaced by drop and
+    create instead of `CREATE OR REPLACE TRIGGER`.
+  - SQLite before 3.25 has no `RENAME COLUMN` and before 3.35 no `DROP COLUMN`; LDB rebuilds the
+    table instead. The `STRICT` option of the table editor needs 3.37 and is hidden below that.
+- **Older servers still work, without guarantee.** You can connect to a server that is older
+  than the minimum. LDB then shows a warning banner below the top bar: "This server version is
+  older than LDB supports. Some features may not work." The banner names the connected version and
+  the minimum. Close it with the **x** button; LDB remembers this for that server and version in
+  your browser. The API reports `version_supported: false` and `min_version` for such a connection.
 
 ### Requirements
 

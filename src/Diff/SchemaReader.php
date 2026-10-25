@@ -147,9 +147,23 @@ final class SchemaReader
             switch ($db::id()) {
                 case 'mysql':
                     $schema = (string) $db->currentDatabase();
+                    if ($db instanceof MySqlDriver && !$db->capabilities()['check_constraints']) {
+                        return []; // MySQL < 8.0.16 parses CHECK but neither enforces nor stores it
+                    }
                     if ($db instanceof MySqlDriver && $db->isMariaDb()) {
-                        $sql = "SELECT TABLE_NAME AS tbl, CONSTRAINT_NAME AS name, CHECK_CLAUSE AS clause
-                                FROM information_schema.CHECK_CONSTRAINTS WHERE CONSTRAINT_SCHEMA = ? AND LEVEL = 'Table'";
+                        if ($this->hasColumn('CHECK_CONSTRAINTS', 'LEVEL')) {
+                            $sql = "SELECT TABLE_NAME AS tbl, CONSTRAINT_NAME AS name, CHECK_CLAUSE AS clause
+                                    FROM information_schema.CHECK_CONSTRAINTS WHERE CONSTRAINT_SCHEMA = ? AND LEVEL = 'Table'";
+                        } else {
+                            // MariaDB < 10.5.10 / 10.4.19 / 10.3.29 has no LEVEL column. Column-level
+                            // constraints are named after their column there, which tells them apart.
+                            $sql = "SELECT cc.TABLE_NAME AS tbl, cc.CONSTRAINT_NAME AS name, cc.CHECK_CLAUSE AS clause
+                                    FROM information_schema.CHECK_CONSTRAINTS cc
+                                    WHERE cc.CONSTRAINT_SCHEMA = ? AND NOT EXISTS (
+                                        SELECT 1 FROM information_schema.COLUMNS col
+                                        WHERE col.TABLE_SCHEMA = cc.CONSTRAINT_SCHEMA AND col.TABLE_NAME = cc.TABLE_NAME
+                                          AND col.COLUMN_NAME = cc.CONSTRAINT_NAME)";
+                        }
                     } else {
                         $sql = "SELECT tc.TABLE_NAME AS tbl, cc.CONSTRAINT_NAME AS name, cc.CHECK_CLAUSE AS clause
                                 FROM information_schema.TABLE_CONSTRAINTS tc
@@ -177,6 +191,15 @@ final class SchemaReader
             return []; // engine without CHECK metadata (MySQL < 8.0.16)
         }
         return $out;
+    }
+
+    /** Whether an information_schema table has a column (differs between server versions). */
+    private function hasColumn(string $table, string $column): bool
+    {
+        return $this->fetch(
+            "SELECT 1 AS x FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = 'information_schema' AND TABLE_NAME = ? AND COLUMN_NAME = ?",
+            [$table, $column]
+        ) !== [];
     }
 
     /** @return array<string,array<string,string>> table => index name => CREATE INDEX … */

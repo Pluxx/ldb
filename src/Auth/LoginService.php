@@ -192,6 +192,11 @@ final class LoginService
             'label' => $label !== null ? self::preview($label, 80)
                 : ($params['driver'] === 'sqlite' ? $params['server'] : $params['user'] . '@' . $params['server']),
             'version' => isset($info['version']) ? (string) $info['version'] : null,
+            // Support policy (Ldb\Db\ServerVersion): older servers connect, the UI shows a warning.
+            'version_supported' => !isset($info['version_supported']) || (bool) $info['version_supported'],
+            'min_version' => isset($info['min_version']) ? (string) $info['min_version'] : null,
+            'version_flavor' => isset($info['version_flavor']) ? (string) $info['version_flavor'] : null,
+            'version_number' => isset($info['version_number']) ? (string) $info['version_number'] : null,
             'database' => $params['database'],
             'preset' => $params['preset'],
             'read_only' => !empty($params['read_only']),

@@ -153,6 +153,57 @@ abstract class AbstractPdoDriver implements DriverInterface
         return $this->pdo;
     }
 
+    // ------------------------------------------------------------------ server version
+
+    /** Version string set by simulateServerVersion() (tests), null = ask the server. */
+    protected ?string $simulatedVersion = null;
+
+    /**
+     * Raw version string as reported by the server (e.g. "10.3.39-MariaDB-1:10.3.39+maria~ubu2004").
+     * Drivers override; serverVersion() normalizes it.
+     */
+    abstract protected function rawServerVersion(): string;
+
+    /** Normalized numeric server version ("8.0.11", "10.3.39", "11.22", "15.0.4415.2", "3.22.0"). */
+    public function serverVersion(): string
+    {
+        if ($this->simulatedVersion !== null) {
+            return ServerVersion::normalize($this->simulatedVersion);
+        }
+        if ($this->pdo === null && $this->params === []) {
+            return ''; // not connected: unknown, version checks treat it as new
+        }
+        return ServerVersion::normalize($this->rawServerVersion());
+    }
+
+    /** Support-policy flavor of this server: mysql | mariadb | pgsql | sqlsrv | sqlite. */
+    public function versionFlavor(): string
+    {
+        return static::id();
+    }
+
+    /** True when the server version is >= $min (unknown versions count as new). */
+    public function versionAtLeast(string $min): bool
+    {
+        return ServerVersion::atLeast($this->serverVersion(), $min);
+    }
+
+    /** {version_number, version_supported, min_version, version_flavor} merged into serverInfo(). */
+    public function versionSupport(): array
+    {
+        return ServerVersion::support($this->versionFlavor(), $this->serverVersion());
+    }
+
+    /**
+     * Testing aid: make the version-dependent logic (capabilities(), SQL generation) behave as on
+     * the given server version without such a server (e.g. SQLite 3.22 while PHP ships 3.4x).
+     * Null restores the real version. Never used by the application itself.
+     */
+    public function simulateServerVersion(?string $version): void
+    {
+        $this->simulatedVersion = $version;
+    }
+
     public function select(?string $database, ?string $schema = null): void
     {
         $this->database = $database;
@@ -276,6 +327,12 @@ abstract class AbstractPdoDriver implements DriverInterface
     protected function unsupported(string $feature): ApiException
     {
         return new ApiException($feature . ' is not supported by the ' . static::label() . ' driver', 'unsupported', 400);
+    }
+
+    /** 'unsupported' error for a feature this server version does not have yet. */
+    protected function needsVersion(string $feature, string $since): ApiException
+    {
+        return new ApiException($feature . ' needs ' . $since . ' or later (server version ' . $this->serverVersion() . ')', 'unsupported', 400);
     }
 
     protected function notFound(string $what): ApiException

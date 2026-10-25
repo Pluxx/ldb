@@ -9,10 +9,11 @@ use PDO;
 use PDOStatement;
 
 /**
- * MySQL 5.7 / 8.x, MariaDB 10.x / 11.x, Percona.
+ * MySQL 8.0.11+ / MariaDB 10.3+ (officially supported, see ServerVersion), Percona; older servers
+ * work with reduced features (capabilities()).
  *
  * Extras beyond DriverInterface:
- *  - isMariaDb(): bool, serverVersion(): string
+ *  - isMariaDb(): bool, rawVersion(): string (VERSION() as reported)
  *  - explainFormat(string $sql, string $format = 'traditional'|'json'|'tree'|'analyze'): QueryResult
  *  - BrowseResult may contain total_estimated:true (InnoDB estimate > 500k rows, no filters)
  *  - ColumnDefinition accepts optional keys: on_update (e.g. "CURRENT_TIMESTAMP"), generated
@@ -140,15 +141,43 @@ class MySqlDriver extends AbstractPdoDriver
         return $this->mariaDb;
     }
 
-    public function serverVersion(): string
+    /** VERSION() as reported, e.g. "10.3.39-MariaDB-1:10.3.39+maria~ubu2004". */
+    public function rawVersion(): string
+    {
+        return $this->simulatedVersion ?? $this->version;
+    }
+
+    protected function rawServerVersion(): string
     {
         return $this->version;
+    }
+
+    public function versionFlavor(): string
+    {
+        return $this->mariaDb ? 'mariadb' : 'mysql';
+    }
+
+    public function simulateServerVersion(?string $version): void
+    {
+        parent::simulateServerVersion($version);
+        $this->mariaDb = stripos($version ?? $this->version, 'mariadb') !== false
+            || ($version === null && stripos($this->versionComment, 'mariadb') !== false);
     }
 
     /** "8.0.36" / "11.4.2" without suffixes. */
     private function numericVersion(): string
     {
-        return preg_match('/^(\d+\.\d+\.\d+)/', $this->version, $m) ? $m[1] : '0.0.0';
+        $v = $this->serverVersion();
+        return $v === '' ? '0.0.0' : $v;
+    }
+
+    /** Version check against the MySQL or the MariaDB release line, whichever this server is. */
+    private function since(string $mysql, ?string $mariadb): bool
+    {
+        if ($this->mariaDb) {
+            return $mariadb !== null && $this->versionAtLeast($mariadb);
+        }
+        return $this->versionAtLeast($mysql);
     }
 
     public function select(?string $database, ?string $schema = null): void
@@ -212,6 +241,20 @@ class MySqlDriver extends AbstractPdoDriver
             'db_copy' => true,
             'db_rename' => true,
             'monitor' => true,
+            // version dependent (MySQL line / MariaDB line)
+            'check_constraints' => $this->since('8.0.16', '10.2.1'),
+            'generated_columns' => true,
+            'functional_indexes' => $this->since('8.0.13', null),
+            'default_expressions' => $this->since('8.0.13', '10.2.1'),
+            'invisible_columns' => $this->since('8.0.23', '10.3.3'),
+            'rename_column' => $this->since('8.0.0', '10.5.2'), // LDB itself uses CHANGE COLUMN
+            'explain_tree' => $this->since('8.0.16', null),
+            'explain_analyze' => $this->since('8.0.18', '10.1.0'),
+            'roles' => $this->since('8.0.0', '10.0.5'),
+            'account_lock' => $this->since('5.7.6', '10.4.2'),
+            'password_expire' => $this->since('5.7.4', '10.4.3'),
+            'sequences' => $this->mariaDb && $this->versionAtLeast('10.3.0'),
+            'create_or_replace_trigger' => $this->mariaDb && $this->versionAtLeast('10.1.4'),
         ];
     }
 
@@ -234,7 +277,7 @@ class MySqlDriver extends AbstractPdoDriver
             'charset' => $row['charset'] ?? null,
             'uptime' => $uptime,
             'driver' => 'mysql',
-        ];
+        ] + $this->versionSupport();
     }
 
     // ------------------------------------------------------------------ databases
@@ -824,7 +867,7 @@ class MySqlDriver extends AbstractPdoDriver
         $out = [];
         foreach ($rows as $r) {
             if (strtoupper((string) $r['etype']) === 'RECURRING') {
-                $schedule = 'EVERY ' . $r['iv'] . ' ' . $r['field'];
+                $schedule = 'EVERY ' . self::eventIntervalValue((string) $r['iv'], (string) $r['field']) . ' ' . $r['field'];
                 if ($r['starts'] !== null) {
                     $schedule .= ' STARTS ' . $r['starts'];
                 }
@@ -837,6 +880,38 @@ class MySqlDriver extends AbstractPdoDriver
             $out[] = ['name' => $r['name'], 'schedule' => $schedule, 'status' => $r['status']];
         }
         return $out;
+    }
+
+    /**
+     * information_schema.EVENTS.INTERVAL_VALUE of a compound unit in its usual notation. Early
+     * MySQL 8.0 releases (e.g. 8.0.11) report the value in the smallest unit ("90" for
+     * EVERY '1:30' HOUR_MINUTE); newer servers already report '1:30' (quotes are stripped).
+     */
+    public static function eventIntervalValue(string $value, string $field): string
+    {
+        $value = trim($value, "'");
+        $field = strtoupper($field);
+        if (!ctype_digit($value)) {
+            return $value;
+        }
+        $n = (int) $value;
+        switch ($field) {
+            case 'YEAR_MONTH':
+                return intdiv($n, 12) . '-' . ($n % 12);
+            case 'DAY_HOUR':
+                return intdiv($n, 24) . ' ' . ($n % 24);
+            case 'DAY_MINUTE':
+                return intdiv($n, 1440) . ' ' . intdiv($n % 1440, 60) . ':' . ($n % 60);
+            case 'DAY_SECOND':
+                return intdiv($n, 86400) . ' ' . intdiv($n % 86400, 3600) . ':' . intdiv($n % 3600, 60) . ':' . ($n % 60);
+            case 'HOUR_MINUTE':
+                return intdiv($n, 60) . ':' . ($n % 60);
+            case 'HOUR_SECOND':
+                return intdiv($n, 3600) . ':' . intdiv($n % 3600, 60) . ':' . ($n % 60);
+            case 'MINUTE_SECOND':
+                return intdiv($n, 60) . ':' . ($n % 60);
+        }
+        return $value;
     }
 
     public function tableInfo(string $table): array
@@ -858,10 +933,13 @@ class MySqlDriver extends AbstractPdoDriver
         if ($this->mariaDb) {
             try {
                 foreach ($this->fetchAll(
-                    "SELECT CONSTRAINT_NAME AS name, CHECK_CLAUSE AS clause FROM information_schema.CHECK_CONSTRAINTS WHERE CONSTRAINT_SCHEMA = ? AND TABLE_NAME = ? AND LEVEL = 'Column'",
+                    // No LEVEL filter: the column is missing before 10.5.10 / 10.4.19; column-level
+                    // constraints are named after their column, which is checked below instead.
+                    'SELECT CONSTRAINT_NAME AS name, CHECK_CLAUSE AS clause FROM information_schema.CHECK_CONSTRAINTS WHERE CONSTRAINT_SCHEMA = ? AND TABLE_NAME = ?',
                     [$db, $table]
                 ) as $ck) {
-                    if (preg_match('/^json_valid\(`((?:[^`]|``)+)`\)$/i', trim((string) $ck['clause']), $m)) {
+                    if (preg_match('/^json_valid\(`((?:[^`]|``)+)`\)$/i', trim((string) $ck['clause']), $m)
+                        && str_replace('``', '`', $m[1]) === (string) $ck['name']) {
                         $jsonCols[str_replace('``', '`', $m[1])] = true;
                     }
                 }
@@ -1248,11 +1326,14 @@ class MySqlDriver extends AbstractPdoDriver
             case 'json':
                 return $this->query('EXPLAIN FORMAT=JSON ' . $sql, 10000);
             case 'tree':
-                if ($this->mariaDb) {
-                    throw $this->unsupported('EXPLAIN FORMAT=TREE');
+                if (!$this->since('8.0.16', null)) {
+                    throw $this->mariaDb ? $this->unsupported('EXPLAIN FORMAT=TREE') : $this->needsVersion('EXPLAIN FORMAT=TREE', 'MySQL 8.0.16');
                 }
                 return $this->query('EXPLAIN FORMAT=TREE ' . $sql, 10000);
             case 'analyze':
+                if (!$this->since('8.0.18', '10.1.0')) {
+                    throw $this->needsVersion('EXPLAIN ANALYZE', 'MySQL 8.0.18');
+                }
                 return $this->query(($this->mariaDb ? 'ANALYZE ' : 'EXPLAIN ANALYZE ') . $sql, 10000);
         }
         return $this->explain($sql);
@@ -1335,6 +1416,9 @@ class MySqlDriver extends AbstractPdoDriver
         foreach ($cols as $c) {
             $c = (string) $c;
             if ($c !== '' && $c[0] === '(') {
+                if (!$this->since('8.0.13', null)) {
+                    throw $this->mariaDb ? $this->unsupported('Functional index key parts') : $this->needsVersion('Functional index key parts', 'MySQL 8.0.13');
+                }
                 $out[] = $c; // functional key part (MySQL 8.0.13+)
             } elseif (preg_match('/^(.+)\((\d+)\)$/', $c, $m)) {
                 $out[] = $this->quoteIdentifier($m[1]) . '(' . $m[2] . ')';

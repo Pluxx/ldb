@@ -100,7 +100,7 @@ abstract class MySqlSchemaDiffTestCase extends TestCase
 
     public function testRoundTrip(): void
     {
-        $r = $this->roundTrip($this->src, $this->tgt, [
+        $expect = [
             'table_added:tags:tags',
             'table_removed:obsolete:obsolete',
             'column_added:authors:bio',
@@ -119,7 +119,12 @@ abstract class MySqlSchemaDiffTestCase extends TestCase
             'routine_added:PROCEDURE:p_count',
             'routine_removed:FUNCTION:f_old',
             'trigger_added:books.trg_books_bi',
-        ], 'none');
+        ];
+        if (!$this->tgt->capabilities()['check_constraints']) {
+            // MySQL < 8.0.16 parses CHECK but neither enforces nor stores it: nothing to compare.
+            $expect = array_values(array_diff($expect, ['check_added:books:chk_price']));
+        }
+        $r = $this->roundTrip($this->src, $this->tgt, $expect, 'none');
         $byId = [];
         foreach ($r['changes'] as $c) {
             $byId[$c['id']] = $c;

@@ -115,6 +115,18 @@ final class PgSqlDriverTest extends TestCase
         ];
     }
 
+    /** serverInfo() carries the support policy (Ldb\Db\ServerVersion) consistent with serverVersion(). */
+    public function testServerVersionSupport(): void
+    {
+        $d = self::$d;
+        $info = $d->serverInfo();
+        $flavor = 'pgsql';
+        $this->assertSame($flavor, $info['version_flavor']);
+        $this->assertSame(\Ldb\Db\ServerVersion::minimum($flavor), $info['min_version']);
+        $this->assertMatchesRegularExpression('/^\d+(\.\d+)*$/', $d->serverVersion());
+        $this->assertSame(\Ldb\Db\ServerVersion::isSupported($flavor, $d->serverVersion()), $info['version_supported']);
+    }
+
     public function testSelectSetsDatabaseAndSchema(): void
     {
         $d = self::$d;
