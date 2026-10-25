@@ -1,0 +1,57 @@
+#!/bin/sh
+# Lint + unit + integration tests in docker. Usage: bin/test [lint|unit|integration|all]
+# PHP_VERSION=8.3 bin/test  to test on another PHP version (default 7.4).
+# WITH_SQLSRV=1 bin/test integration  also builds pdo_sqlsrv into the test image, starts the mssql profile
+# and runs SqlSrvDriverTest (otherwise it runs too if the mssql service is already up and the image has pdo_sqlsrv).
+set -eu
+cd "$(dirname "$0")/.."
+PHPV="${PHP_VERSION:-7.4}"
+WHAT="${1:-all}"
+UIDGID="$(id -u):$(id -g)"
+NET=ldb_default
+
+# Test image: php-cli + pdo_mysql/pgsql/zip/bz2 (reuses the app image build, which has all extensions).
+SQLSRV="${WITH_SQLSRV:-0}"
+IMG="ldb-app-test:$PHPV"
+[ "$SQLSRV" = 1 ] && IMG="ldb-app-test:$PHPV-sqlsrv"
+docker build -q --build-arg "PHP_VERSION=$PHPV" --build-arg "WITH_SQLSRV=$SQLSRV" -f docker/php/Dockerfile -t "$IMG" . >/dev/null
+run() { docker run --rm -u "$UIDGID" -e HOME=/tmp -v "$PWD":/var/www/html -w /var/www/html "$@"; }
+
+if [ "$WHAT" = all ] || [ "$WHAT" = lint ]; then
+  echo "== php -l (php:$PHPV) =="
+  docker run --rm -u "$UIDGID" -v "$PWD":/app -w /app "$IMG" sh -c \
+    'find src public config tests -name "*.php" -print0 | xargs -0 -n1 php -l | grep -v "^No syntax errors" || true; find src public config tests -name "*.php" -print0 | xargs -0 -n1 php -l >/dev/null'
+  echo "lint OK"
+fi
+
+if [ ! -x vendor/bin/phpunit ]; then
+  echo "vendor/bin/phpunit missing: run  docker run --rm -u $UIDGID -v \$PWD:/app -w /app composer:2 install" >&2
+  exit 1
+fi
+
+if [ "$WHAT" = all ] || [ "$WHAT" = unit ]; then
+  echo "== phpunit Unit =="
+  run "$IMG" php vendor/bin/phpunit --do-not-cache-result --testsuite Unit
+fi
+
+if [ "$WHAT" = all ] || [ "$WHAT" = integration ]; then
+  echo "== phpunit Integration =="
+  if [ ! -d tests/Integration ]; then echo "tests/Integration not present, skipping"; exit 0; fi
+  docker compose up -d --wait mariadb mysql postgres
+  MSSQL_ENV=""
+  if [ "$SQLSRV" = 1 ]; then docker compose --profile mssql up -d --wait mssql; fi
+  if docker run --rm "$IMG" php -m | grep -q '^pdo_sqlsrv$' \
+     && [ -n "$(docker compose --profile mssql ps --status running -q mssql 2>/dev/null)" ]; then
+    MSSQL_ENV="yes"
+  fi
+  # shellcheck disable=SC2046
+  run --network "$NET" \
+    $([ -n "$MSSQL_ENV" ] && echo "-e LDB_TEST_SQLSRV_DSN=sqlsrv:Server=mssql,1433;TrustServerCertificate=yes -e LDB_TEST_SQLSRV_USER=sa -e LDB_TEST_SQLSRV_PASS=Ldb_Passw0rd!") \
+    -e LDB_TEST_MYSQL_DSN='mysql:host=mysql;port=3306;dbname=ldb_demo;charset=utf8mb4' \
+    -e LDB_TEST_MYSQL_USER=root -e LDB_TEST_MYSQL_PASS=root \
+    -e LDB_TEST_MARIADB_DSN='mysql:host=mariadb;port=3306;dbname=ldb_demo;charset=utf8mb4' \
+    -e LDB_TEST_MARIADB_USER=root -e LDB_TEST_MARIADB_PASS=root \
+    -e LDB_TEST_PGSQL_DSN='pgsql:host=postgres;port=5432;dbname=ldb_demo' \
+    -e LDB_TEST_PGSQL_USER=postgres -e LDB_TEST_PGSQL_PASS=postgres \
+    "$IMG" php vendor/bin/phpunit --do-not-cache-result --testsuite Integration
+fi

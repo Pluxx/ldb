@@ -1,0 +1,20 @@
+{
+  "name": "ldb",
+  "private": true,
+  "version": "0.1.0",
+  "description": "LDB frontend build (Tailwind CSS v4 + esbuild, vanilla ES modules)",
+  "type": "module",
+  "scripts": {
+    "build": "npm run build:css && npm run build:js",
+    "build:css": "tailwindcss -i resources/css/app.css -o public/assets/dist/app.css --minify",
+    "build:js": "node resources/build.mjs",
+    "test": "node --test \"resources/js/**/*.test.mjs\"",
+    "dev": "node resources/build.mjs --watch & tailwindcss -i resources/css/app.css -o public/assets/dist/app.css --watch"
+  },
+  "devDependencies": {
+    "@tailwindcss/cli": "^4.1.0",
+    "esbuild": "^0.25.0",
+    "lucide": "^0.468.0",
+    "tailwindcss": "^4.1.0"
+  }
+}

@@ -1,0 +1,26 @@
+/vendor/
+/node_modules/
+/config/config.php
+.phpunit.result.cache
+/dist/
+
+# Editors / IDEs
+.idea/
+.vscode/
+*.iml
+.fleet/
+.DS_Store
+Thumbs.db
+
+# AI assistant / agent files
+.claude/
+CLAUDE.md
+CLAUDE.local.md
+AGENTS.md
+GEMINI.md
+.cursor/
+.cursorrules
+.windsurf/
+.aider*
+.github/copilot-instructions.md
+HANDOVER.md

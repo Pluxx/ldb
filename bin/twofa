@@ -1,0 +1,137 @@
+#!/usr/bin/env php
+<?php
+
+declare(strict_types=1);
+
+/*
+ * Administer LDB two-factor authentication records (SECURITY.md → Two-factor authentication).
+ *
+ *   php bin/twofa list
+ *   php bin/twofa reset --preset=ID --user=NAME          lost device: remove the login's 2FA
+ *   php bin/twofa reset --driver=mysql --host=H [--port=N] --user=NAME
+ *   php bin/twofa reset --sqlite=/path/to/file.sqlite
+ *
+ * Run it as the user PHP runs as (e.g. sudo -u www-data php bin/twofa list): the store
+ * directory is private to that user. After a reset the user logs in with the password only
+ * (or must enroll again when twofa_required applies).
+ */
+if (PHP_SAPI !== 'cli') {
+    http_response_code(404);
+    exit;
+}
+
+$root = dirname(__DIR__);
+require is_file($root . '/vendor/autoload.php') ? $root . '/vendor/autoload.php' : $root . '/src/autoload.php';
+
+use Ldb\Auth\TwoFactor;
+use Ldb\Auth\TwoFactorStore;
+use Ldb\Config;
+
+$usage = <<<'TXT'
+Usage: php bin/twofa list [--config=FILE]
+       php bin/twofa reset (--preset=ID --user=NAME | --driver=D --host=H [--port=N] --user=NAME
+                            | --sqlite=FILE) [--config=FILE]
+
+TXT;
+
+// getopt() stops at the sub-command, so parse "--key=value" options by hand.
+$cmd = $argv[1] ?? '';
+$opts = [];
+$known = ['preset', 'user', 'driver', 'host', 'port', 'sqlite', 'config'];
+foreach (array_slice($argv, 2) as $arg) {
+    if ($arg === '-h' || $arg === '--help') {
+        $opts['help'] = true;
+    } elseif (preg_match('/^--([a-z]+)=(.*)$/s', $arg, $m) && in_array($m[1], $known, true)) {
+        $opts[$m[1]] = $m[2];
+    } else {
+        fwrite(STDERR, "Unknown argument: $arg\n");
+        $cmd = '';
+    }
+}
+if (isset($opts['help']) || in_array($cmd, ['-h', '--help'], true) || !in_array($cmd, ['list', 'reset'], true)) {
+    fwrite(STDERR, $usage);
+    exit(isset($opts['help']) || in_array($cmd, ['-h', '--help'], true) ? 0 : 2);
+}
+$opt = static function (string $k) use ($opts): ?string {
+    $v = $opts[$k] ?? null;
+    return is_string($v) && $v !== '' ? $v : null;
+};
+
+$config = Config::load($opt('config') ?? $root . '/config/config.php');
+$dir = TwoFactorStore::recordDir($config);
+if (!is_dir($dir)) {
+    // The default data_dir depends on the process user: a different user looks elsewhere.
+    fwrite(STDERR, "No two-factor store at $dir.\nRun this as the user PHP runs as (e.g. sudo -u www-data php bin/twofa …) or set data_dir.\n");
+    exit(1);
+}
+
+if ($cmd === 'list') {
+    $store = TwoFactorStore::fromConfig($config);
+    if ($store === null) {
+        fwrite(STDERR, "secret_key is not set: listing record files only (identities are encrypted).\n");
+        foreach (glob($dir . '/*.json') ?: [] as $f) {
+            echo basename($f, '.json'), "\n";
+        }
+        exit(0);
+    }
+    try {
+        $records = $store->all();
+    } catch (\RuntimeException $e) {
+        fwrite(STDERR, $e->getMessage() . "\n");
+        exit(1);
+    }
+    if ($records === []) {
+        echo "No two-factor records in $dir\n";
+        exit(0);
+    }
+    foreach ($records as $r) {
+        if (isset($r['error'])) {
+            printf("%s  UNREADABLE (%s)\n", substr((string) $r['file'], 0, 12), $r['error']);
+            continue;
+        }
+        printf(
+            "%s  %-40s  since %s  last used %s  recovery codes left %d\n",
+            substr((string) $r['file'], 0, 12),
+            TwoFactor::describe((string) ($r['identity'] ?? '')),
+            isset($r['created']) ? date('Y-m-d H:i', (int) $r['created']) : '-',
+            isset($r['last_used']) ? date('Y-m-d H:i', (int) $r['last_used']) : 'never',
+            count((array) ($r['recovery'] ?? []))
+        );
+    }
+    exit(0);
+}
+
+// reset
+if ($opt('sqlite') !== null) {
+    $file = realpath((string) $opt('sqlite'));
+    $params = ['driver' => 'sqlite', 'file' => $file === false ? (string) $opt('sqlite') : $file];
+} elseif ($opt('preset') !== null && $opt('user') !== null) {
+    // Identities use the preset's server address (driver, host, port), not its id.
+    $preset = null;
+    foreach ($config->arr('servers') as $i => $p) {
+        if (is_array($p) && (string) ($p['id'] ?? $i) === $opt('preset')) {
+            $preset = $p;
+        }
+    }
+    if ($preset === null) {
+        fwrite(STDERR, 'Unknown preset: ' . $opt('preset') . "\n");
+        exit(1);
+    }
+    $params = ['driver' => (string) ($preset['driver'] ?? 'mysql'), 'host' => $preset['host'] ?? null, 'port' => $preset['port'] ?? null, 'user' => $opt('user')];
+} elseif ($opt('driver') !== null && $opt('host') !== null && $opt('user') !== null) {
+    $params = ['driver' => $opt('driver'), 'host' => $opt('host'), 'port' => $opt('port'), 'user' => $opt('user')];
+} else {
+    fwrite(STDERR, $usage);
+    exit(2);
+}
+$identity = TwoFactor::identity($params);
+$file = $dir . '/' . hash('sha256', $identity) . '.json';
+if (!is_file($file)) {
+    fwrite(STDERR, 'No two-factor record for ' . TwoFactor::describe($identity) . "\n");
+    exit(1);
+}
+if (!@unlink($file)) {
+    fwrite(STDERR, "Could not delete $file (run as the PHP user?)\n");
+    exit(1);
+}
+echo 'Two-factor authentication reset for ' . TwoFactor::describe($identity) . "\n";

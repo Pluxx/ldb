@@ -1,0 +1,61 @@
+#!/bin/sh
+# Build release archives: dist/ldb-<version>.zip, .tar.gz and dist/SHA256SUMS.
+#
+#   bin/package [--worktree] [<version>]
+#
+# Without --worktree only committed files (git archive HEAD) are packaged.
+# With --worktree the current working tree (tracked + untracked, respecting
+# .gitignore) is packaged, for local testing. Dev-only files are dropped via
+# export-ignore entries in .gitattributes. <version> (optional, "v" prefix ok)
+# must match src/Version.php.
+set -eu
+
+cd "$(dirname "$0")/.."
+
+worktree=0
+want=""
+for arg in "$@"; do
+    case "$arg" in
+        --worktree) worktree=1 ;;
+        -h|--help) sed -n '2,10p' "$0"; exit 0 ;;
+        -*) echo "unknown option: $arg" >&2; exit 2 ;;
+        *) want="${arg#v}" ;;
+    esac
+done
+
+if [ "$worktree" = 1 ]; then
+    version=$(sed -n "s/.*const VERSION = '\([^']*\)'.*/\1/p" src/Version.php)
+else
+    version=$(git show HEAD:src/Version.php | sed -n "s/.*const VERSION = '\([^']*\)'.*/\1/p")
+fi
+[ -n "$version" ] || { echo "cannot read version from src/Version.php" >&2; exit 1; }
+if [ -n "$want" ] && [ "$want" != "$version" ]; then
+    echo "version mismatch: requested $want, src/Version.php has $version" >&2
+    exit 1
+fi
+
+if [ "$worktree" = 1 ]; then
+    tmpidx=$(mktemp -u "${TMPDIR:-/tmp}/ldb-idx.XXXXXX")
+    trap 'rm -f "$tmpidx"' EXIT INT TERM
+    GIT_INDEX_FILE="$tmpidx" git add -A .
+    tree=$(GIT_INDEX_FILE="$tmpidx" git write-tree)
+else
+    tree=HEAD
+fi
+
+name="ldb-$version"
+mkdir -p dist
+rm -f "dist/$name.zip" "dist/$name.tar.gz"
+git archive --format=zip --prefix="$name/" -o "dist/$name.zip" "$tree"
+git archive --format=tar.gz --prefix="$name/" -o "dist/$name.tar.gz" "$tree"
+
+(
+    cd dist
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$name.zip" "$name.tar.gz" > SHA256SUMS
+    else
+        shasum -a 256 "$name.zip" "$name.tar.gz" > SHA256SUMS
+    fi
+    cat SHA256SUMS
+)
+echo "built dist/$name.zip and dist/$name.tar.gz"

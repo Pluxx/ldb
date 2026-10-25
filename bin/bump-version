@@ -1,0 +1,15 @@
+#!/bin/sh
+# Usage: bin/bump-version <x.y.z>   (updates src/Version.php and package.json)
+set -eu
+cd "$(dirname "$0")/.."
+v="${1:-}"
+case "$v" in
+    [0-9]*.[0-9]*.[0-9]*) ;;
+    *) echo "usage: bin/bump-version <x.y.z>" >&2; exit 2 ;;
+esac
+sed -i.bak "s/\(const VERSION = '\)[^']*'/\1$v'/" src/Version.php
+sed -i.bak "s/^\(  \"version\": \)\"[^\"]*\"/\1\"$v\"/" package.json
+rm -f src/Version.php.bak package.json.bak
+grep -n "const VERSION" src/Version.php
+grep -n '"version"' package.json
+echo "Remember: move [Unreleased] in CHANGELOG.md to [$v], commit, then tag v$v."

@@ -1,0 +1,33 @@
+# Fallback for installations where the whole repository sits inside the web root.
+# Preferred setup: point the virtual host's DocumentRoot at public/.
+Options -Indexes
+DirectoryIndex index.php
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+
+    # Never serve internals or dotfiles (.git, .env, .htaccess, .phpunit.result.cache …).
+    RewriteRule ^(src|config|vendor|tests|resources|node_modules|bin|docker|docs)(/|$) - [F,L]
+    RewriteRule (^|/)\. - [F,L]
+    RewriteRule ^[^/]*\.(md|json|lock|dist|yml|yaml|xml|txt|sh|mjs)$ - [F,L]
+
+    # Everything else is served from public/.
+    RewriteCond %{REQUEST_URI} !/public/
+    RewriteRule ^(.*)$ public/$1 [L]
+</IfModule>
+
+<IfModule !mod_rewrite.c>
+    # Without mod_rewrite only files can be denied here; the directories carry their own
+    # "Require all denied" .htaccess (src/, config/, tests/, bin/, docker/, resources/).
+    <IfModule mod_authz_core.c>
+        <FilesMatch "^\.|\.(json|lock|md|dist|yml|yaml|xml|txt|sh|mjs)$">
+            Require all denied
+        </FilesMatch>
+    </IfModule>
+    <IfModule !mod_authz_core.c>
+        <FilesMatch "^\.|\.(json|lock|md|dist|yml|yaml|xml|txt|sh|mjs)$">
+            Order allow,deny
+            Deny from all
+        </FilesMatch>
+    </IfModule>
+</IfModule>

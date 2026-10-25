@@ -1,0 +1,87 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    name: Build and publish release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read version from src/Version.php
+        id: ver
+        run: |
+          version=$(sed -n "s/.*const VERSION = '\([^']*\)'.*/\1/p" src/Version.php)
+          tag="${GITHUB_REF_NAME#v}"
+          if [ "$version" != "$tag" ]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} does not match src/Version.php ($version). Run bin/bump-version."
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test --if-present
+      - run: npm run build
+      - name: Committed assets are up to date
+        run: |
+          if ! git diff --exit-code -- public/assets/dist; then
+            echo "::error::public/assets/dist is out of date. Run 'npm run build' and commit the result."
+            exit 1
+          fi
+          if [ -n "$(git ls-files --others --exclude-standard -- public/assets/dist)" ]; then
+            echo "::error::npm run build produced untracked files in public/assets/dist. Commit them."
+            git ls-files --others --exclude-standard -- public/assets/dist
+            exit 1
+          fi
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '7.4'
+          extensions: pdo, pdo_sqlite, mbstring, openssl, zip, bz2, iconv, zlib
+          coverage: none
+          tools: composer:v2
+      - run: composer install --no-interaction --no-progress --prefer-dist
+      - name: Unit tests
+        run: vendor/bin/phpunit --do-not-cache-result --testsuite Unit
+
+      - name: Package
+        run: bin/package "${{ steps.ver.outputs.version }}"
+
+      - name: Extract release notes from CHANGELOG.md
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          awk -v v="$VERSION" '
+            /^## \[/ { if (found) exit; if (index($0, "## [" v "]") == 1) { found = 1; next } }
+            found { print }
+          ' CHANGELOG.md > release-notes.md
+          if [ ! -s release-notes.md ]; then
+            echo "::error::No section for $VERSION found in CHANGELOG.md"
+            exit 1
+          fi
+          cat release-notes.md
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            "dist/ldb-${VERSION}.zip" \
+            "dist/ldb-${VERSION}.tar.gz" \
+            dist/SHA256SUMS \
+            --title "LDB ${VERSION}" \
+            --notes-file release-notes.md \
+            --verify-tag

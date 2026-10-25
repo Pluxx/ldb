@@ -1,0 +1,25 @@
+# LDB public web root
+Options -Indexes
+DirectoryIndex index.php
+
+# Deny dotfiles (.htaccess, .git, .env …)
+<IfModule mod_authz_core.c>
+    <FilesMatch "^\.">
+        Require all denied
+    </FilesMatch>
+</IfModule>
+<IfModule !mod_authz_core.c>
+    <FilesMatch "^\.">
+        Order allow,deny
+        Deny from all
+    </FilesMatch>
+</IfModule>
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteRule (^|/)\. - [F,L]
+</IfModule>
+
+<IfModule mod_mime.c>
+    AddType image/svg+xml .svg
+    AddType text/javascript .js .mjs
+</IfModule>

@@ -1,0 +1,102 @@
+#!/usr/bin/env php
+<?php
+
+declare(strict_types=1);
+
+/*
+ * Create an LDB single sign-on link (docs/sso.md) from the sso_secret in config/config.php.
+ *
+ *   php bin/sso-link --preset=mariadb --user=root [--database=shop] [--url=https://db.example.com/]
+ *   printf '%s\n' "$PW" | php bin/sso-link --preset=pg --user=app --password-stdin --token-only
+ *
+ * The password is read from STDIN (--password-stdin) or prompted for without echo; it is never
+ * taken from the command line (visible in `ps` and shell history).
+ */
+if (PHP_SAPI !== 'cli') {
+    http_response_code(404);
+    exit;
+}
+
+$root = dirname(__DIR__);
+require is_file($root . '/vendor/autoload.php') ? $root . '/vendor/autoload.php' : $root . '/src/autoload.php';
+
+use Ldb\Auth\Sso;
+use Ldb\Config;
+
+$usage = <<<'TXT'
+Usage: php bin/sso-link (--preset=ID | --driver=mysql|pgsql|sqlite|sqlsrv --host=H [--port=N])
+                        --user=USER [--password-stdin] [--database=DB] [--schema=S] [--table=T]
+                        [--redirect='#/c/{conn}/sql'] [--read-only] [--label=TEXT]
+                        [--ttl=SECONDS] [--url=BASE_URL] [--config=FILE] [--token-only]
+  --url         LDB's public URL (default http://localhost:8080/)
+  --token-only  print only the token (for a POST form field "token", recommended)
+
+TXT;
+
+$opts = getopt('h', [
+    'help', 'preset:', 'driver:', 'host:', 'port:', 'user:', 'password-stdin', 'database:', 'schema:',
+    'table:', 'redirect:', 'read-only', 'label:', 'ttl:', 'url:', 'config:', 'token-only',
+]);
+if ($opts === false || isset($opts['h']) || isset($opts['help']) || (!isset($opts['preset']) && !isset($opts['driver']))) {
+    fwrite(STDERR, $usage);
+    exit(isset($opts['h']) || isset($opts['help']) ? 0 : 2);
+}
+$opt = static function (string $k) use ($opts): ?string {
+    $v = $opts[$k] ?? null;
+    return is_string($v) && $v !== '' ? $v : null;
+};
+
+$config = Config::load($opt('config') ?? $root . '/config/config.php');
+$secret = Sso::secret($config);
+if ($secret === null) {
+    fwrite(STDERR, "sso_secret is not set (or shorter than " . Sso::MIN_SECRET_BYTES . " bytes) in the configuration.\n");
+    exit(1);
+}
+
+if (isset($opts['password-stdin'])) {
+    $line = fgets(STDIN);
+    $password = $line === false ? '' : rtrim($line, "\r\n");
+} elseif (function_exists('posix_isatty') && posix_isatty(STDIN)) {
+    fwrite(STDERR, 'Database password: ');
+    $echoOff = (bool) @shell_exec('stty -echo 2>/dev/null && echo 1');
+    $line = fgets(STDIN);
+    if ($echoOff) {
+        @shell_exec('stty echo 2>/dev/null');
+    }
+    fwrite(STDERR, PHP_EOL);
+    $password = $line === false ? '' : rtrim($line, "\r\n");
+} else {
+    fwrite(STDERR, "No terminal: pass the password on STDIN with --password-stdin.\n");
+    exit(2);
+}
+
+$ttl = $opt('ttl') !== null ? (int) $opt('ttl') : Sso::ttl($config);
+if ($ttl < 1 || $ttl > Sso::ttl($config)) {
+    fwrite(STDERR, 'ttl must be between 1 and ' . Sso::ttl($config) . " (sso_ttl).\n");
+    exit(2);
+}
+$now = time();
+$claims = ['user' => (string) $opt('user'), 'password' => $password, 'iat' => $now, 'exp' => $now + $ttl];
+foreach (['preset', 'driver', 'host', 'database', 'schema', 'label', 'redirect'] as $k) {
+    if ($opt($k) !== null) {
+        $claims[$k] = $opt($k);
+    }
+}
+if ($opt('port') !== null) {
+    $claims['port'] = (int) $opt('port');
+}
+if (isset($opts['read-only'])) {
+    $claims['read_only'] = true;
+}
+if ($opt('table') !== null && !isset($claims['redirect'])) {
+    $claims['redirect'] = ['db' => (string) $opt('database'), 'schema' => $opt('schema'), 'table' => $opt('table')];
+}
+
+try {
+    echo isset($opts['token-only'])
+        ? Sso::createToken($claims, $secret)
+        : Sso::createUrl($opt('url') ?? 'http://localhost:8080/', $claims, $secret), PHP_EOL;
+} catch (\Throwable $e) {
+    fwrite(STDERR, 'Error: ' . $e->getMessage() . PHP_EOL);
+    exit(1);
+}

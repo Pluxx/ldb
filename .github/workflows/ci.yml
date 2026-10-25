@@ -1,0 +1,191 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  lint-unit:
+    name: Lint + Unit (PHP ${{ matrix.php }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['7.4', '8.0', '8.1', '8.2', '8.3', '8.4']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: pdo, pdo_mysql, pdo_pgsql, pdo_sqlite, mbstring, openssl, zip, bz2, iconv, zlib
+          coverage: none
+          tools: composer:v2
+      - name: Get Composer cache dir
+        id: composer-cache
+        run: echo "dir=$(composer config cache-files-dir)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        with:
+          path: ${{ steps.composer-cache.outputs.dir }}
+          key: composer-${{ matrix.php }}-${{ hashFiles('composer.json', 'composer.lock') }}
+          restore-keys: composer-${{ matrix.php }}-
+      - run: composer install --no-interaction --no-progress --prefer-dist
+      - name: Lint (php -l)
+        run: |
+          find src public config tests -name '*.php' -print0 \
+            | xargs -0 -n1 -P4 sh -c 'php -l "$0" >/dev/null || { php -l "$0"; exit 255; }'
+      - name: Unit tests
+        run: vendor/bin/phpunit --do-not-cache-result --testsuite Unit
+
+  integration:
+    name: Integration (PHP ${{ matrix.php }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['7.4', '8.3']
+    services:
+      mariadb:
+        image: mariadb:11
+        env:
+          MARIADB_ROOT_PASSWORD: root
+          MARIADB_DATABASE: ldb_demo
+        ports: ['3307:3306']
+        options: >-
+          --health-cmd "healthcheck.sh --connect --innodb_initialized"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: ldb_demo
+        ports: ['3308:3306']
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -proot --silent"
+          --health-interval 5s --health-timeout 5s --health-retries 30
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: ldb_demo
+        ports: ['5433:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres -d ldb_demo"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      # The tests create (and drop) their own throw-away databases; no seed data is needed.
+      LDB_TEST_MARIADB_DSN: mysql:host=127.0.0.1;port=3307;dbname=ldb_demo;charset=utf8mb4
+      LDB_TEST_MARIADB_USER: root
+      LDB_TEST_MARIADB_PASS: root
+      LDB_TEST_MYSQL_DSN: mysql:host=127.0.0.1;port=3308;dbname=ldb_demo;charset=utf8mb4
+      LDB_TEST_MYSQL_USER: root
+      LDB_TEST_MYSQL_PASS: root
+      LDB_TEST_PGSQL_DSN: pgsql:host=127.0.0.1;port=5433;dbname=ldb_demo
+      LDB_TEST_PGSQL_USER: postgres
+      LDB_TEST_PGSQL_PASS: postgres
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: pdo, pdo_mysql, pdo_pgsql, pdo_sqlite, mbstring, openssl, zip, bz2, iconv, zlib
+          coverage: none
+          tools: composer:v2
+      - name: Get Composer cache dir
+        id: composer-cache
+        run: echo "dir=$(composer config cache-files-dir)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        with:
+          path: ${{ steps.composer-cache.outputs.dir }}
+          key: composer-${{ matrix.php }}-${{ hashFiles('composer.json', 'composer.lock') }}
+          restore-keys: composer-${{ matrix.php }}-
+      - run: composer install --no-interaction --no-progress --prefer-dist
+      - name: Integration tests
+        run: vendor/bin/phpunit --do-not-cache-result --testsuite Integration
+
+  integration-sqlsrv:
+    # Separate from "integration" so a SQL Server (or ODBC driver) problem is clearly attributable.
+    name: Integration SQL Server (PHP 8.3)
+    runs-on: ubuntu-latest
+    continue-on-error: false
+    services:
+      mssql:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        env:
+          ACCEPT_EULA: 'Y'
+          MSSQL_SA_PASSWORD: Ldb_Passw0rd!
+        ports: ['1434:1433']
+        options: >-
+          --health-cmd "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P Ldb_Passw0rd! -Q 'SELECT 1'"
+          --health-interval 10s --health-timeout 5s --health-retries 20 --health-start-period 20s
+    env:
+      # The test creates (and drops) its own throw-away database.
+      LDB_TEST_SQLSRV_DSN: sqlsrv:Server=127.0.0.1,1434;TrustServerCertificate=yes
+      LDB_TEST_SQLSRV_USER: sa
+      LDB_TEST_SQLSRV_PASS: Ldb_Passw0rd!
+    steps:
+      - uses: actions/checkout@v4
+      - name: Microsoft ODBC Driver 18 (if the runner image lacks it)
+        run: |
+          if ! odbcinst -q -d 2>/dev/null | grep -q 'ODBC Driver 1[78] for SQL Server'; then
+            curl -fsSL -o /tmp/ms-prod.deb "https://packages.microsoft.com/config/ubuntu/$(lsb_release -rs)/packages-microsoft-prod.deb"
+            sudo dpkg -i /tmp/ms-prod.deb
+            sudo apt-get update
+            sudo ACCEPT_EULA=Y apt-get install -y msodbcsql18 unixodbc-dev
+          fi
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: pdo, sqlsrv, pdo_sqlsrv, mbstring, openssl, iconv, zlib
+          coverage: none
+          tools: composer:v2
+      - name: Get Composer cache dir
+        id: composer-cache
+        run: echo "dir=$(composer config cache-files-dir)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        with:
+          path: ${{ steps.composer-cache.outputs.dir }}
+          key: composer-8.3-${{ hashFiles('composer.json', 'composer.lock') }}
+          restore-keys: composer-8.3-
+      - run: composer install --no-interaction --no-progress --prefer-dist
+      - name: SQL Server integration test
+        run: vendor/bin/phpunit --do-not-cache-result --testsuite Integration --filter SqlSrvDriverTest
+
+  frontend:
+    name: Frontend build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test --if-present
+      - run: npm run build
+      - name: Committed assets are up to date
+        run: |
+          if ! git diff --exit-code -- public/assets/dist; then
+            echo "::error::public/assets/dist is out of date. Run 'npm run build' and commit the result."
+            exit 1
+          fi
+          if [ -n "$(git ls-files --others --exclude-standard -- public/assets/dist)" ]; then
+            echo "::error::npm run build produced untracked files in public/assets/dist. Commit them."
+            git ls-files --others --exclude-standard -- public/assets/dist
+            exit 1
+          fi
+
+  i18n:
+    name: i18n completeness
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 bin/check-i18n.py --strict resources/js/i18n/locales

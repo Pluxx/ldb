@@ -1,0 +1,113 @@
+# LDB developer stack.  docker compose up -d --build
+# PHP 8.3 instead of 7.4:  PHP_VERSION=8.3 docker compose up -d --build
+# SQL Server (optional):   WITH_SQLSRV=1 docker compose --profile mssql up -d --build --wait
+#   (WITH_SQLSRV=1 builds the app image with ODBC Driver 18 + pdo_sqlsrv/pdo_dblib; default 0 = lighter image)
+name: ldb
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: docker/php/Dockerfile
+      args:
+        PHP_VERSION: ${PHP_VERSION:-7.4}
+        WITH_SQLSRV: ${WITH_SQLSRV:-0}
+    ports:
+      - "8080:80"
+    volumes:
+      - .:/var/www/html
+      # Config has no env override, so the docker config is mounted as config/config.php (container only).
+      - ./config/config.docker.php:/var/www/html/config/config.php:ro
+      - sqlite_data:/var/www/data
+    depends_on:
+      mariadb: { condition: service_healthy }
+      mysql: { condition: service_healthy }
+      postgres: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS -o /dev/null http://localhost/ || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  mariadb:
+    image: mariadb:11
+    environment:
+      MARIADB_ROOT_PASSWORD: root
+      MARIADB_DATABASE: ldb_demo
+    command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_unicode_ci"]
+    volumes:
+      - mariadb_data:/var/lib/mysql
+      - ./docker/seed/mysql.sql:/docker-entrypoint-initdb.d/10-demo.sql:ro
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: ldb_demo
+    command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_unicode_ci"]
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./docker/seed/mysql.sql:/docker-entrypoint-initdb.d/10-demo.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -proot --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: ldb_demo
+    # pg_stat_statements feeds the server monitor's "top queries"
+    command: ["postgres", "-c", "shared_preload_libraries=pg_stat_statements", "-c", "pg_stat_statements.track=all"]
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ./docker/seed/pgsql.sql:/docker-entrypoint-initdb.d/10-demo.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d ldb_demo"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # Optional (profile "mssql"). Build the app with WITH_SQLSRV=1 so it has pdo_sqlsrv.
+  # Host "mssql", user sa, password Ldb_Passw0rd!. The seed (docker/seed/mssql.sql) is applied by mssql-init.
+  mssql:
+    profiles: ["mssql"]
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: Ldb_Passw0rd!
+    ports:
+      - "1433:1433"
+    volumes:
+      - mssql_data:/var/opt/mssql
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P Ldb_Passw0rd! -Q 'SELECT 1' || /opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P Ldb_Passw0rd! -Q 'SELECT 1'"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  # One-shot: applies the demo seed once the server is healthy, then exits (idempotent).
+  mssql-init:
+    profiles: ["mssql"]
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    depends_on:
+      mssql: { condition: service_healthy }
+    restart: "no"
+    volumes:
+      - ./docker/seed/mssql.sql:/seed/mssql.sql:ro
+    entrypoint: ["/opt/mssql-tools18/bin/sqlcmd", "-C", "-S", "mssql", "-U", "sa", "-P", "Ldb_Passw0rd!", "-f", "65001", "-b", "-i", "/seed/mssql.sql"]
+
+volumes:
+  mariadb_data:
+  mysql_data:
+  mssql_data:
+  pg_data:
+  sqlite_data:
