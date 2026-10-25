@@ -6,20 +6,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
-### Added
-- **Supported database versions:** every release of 2018 or later is officially supported (MySQL 8.0.11, MariaDB 10.3, PostgreSQL 11, SQL Server 2019, SQLite 3.22). Version-dependent features are switched on per server version (new capability flags); older servers still connect, and the UI shows a dismissible warning banner (`version_supported: false` + `min_version` in `server.overview` and the connection metadata). CI runs the integration tests against the oldest supported versions as well (MariaDB 10.3, MySQL 8.0.11, PostgreSQL 11, SQL Server 2019).
-
-### Fixed
-- MariaDB 10.3: the privileges editor no longer offers account locking and password expiry (they need 10.4); `CHECK` constraints are read without the `LEVEL` column (added in 10.5.10 / 10.4.19), so the schema diff finds them.
-- MySQL 8.0.11 to 8.0.15: the schema diff no longer expects stored `CHECK` constraints; events with a compound interval (for example `EVERY '1:30' HOUR_MINUTE`) are shown correctly although these versions report the value in the smallest unit.
-- SQLite before 3.26: table columns are read with `PRAGMA table_info` when `table_xinfo` is not available; `STRICT` tables (3.37) and generated columns (3.31) are refused with a clear message instead of an SQL error.
-
 ## [0.1.0] - 2026-10-25
 
 This is the initial public release (beta).
 
 ### Added
 - **Engines:** MySQL / MariaDB / Percona, PostgreSQL, SQLite and Microsoft SQL Server (`pdo_sqlsrv` or `pdo_dblib`); features that a driver cannot support are hidden.
+- **Supported database versions:** every release of 2018 or later (MySQL 8.0.11, MariaDB 10.3, PostgreSQL 11, SQL Server 2019, SQLite 3.22); features are switched on per server version, and older servers can still connect with a warning.
 - **Browse & edit:** data grid with sorting, filter builder, search, pagination, foreign-key dropdowns and links; batched edits (cell edits, inserts, deletes) reviewed as SQL and applied in one transaction; "Copy link" to the current view.
 - **SQL editor:** syntax highlighting, dialect-aware autocomplete and formatter, multiple statements and result sets, `EXPLAIN`, history, saved queries (JSON export/import), share links, **Stop** for running queries, *Atomic* and *Dry run* transaction modes, risky-SQL confirmation; procedure and trigger bodies with `BEGIN … END` do not need `DELIMITER`.
 - **Structure:** create/alter tables with SQL preview, table operations, DDL view; editor for routines, events and triggers (parameters, characteristics, execute with OUT values).
